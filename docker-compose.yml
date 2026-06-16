@@ -1,0 +1,12 @@
+# Access using : http://localhost:8123 with test:test
+services:
+  homeassistant:
+    container_name: homeassistant-ocea-smb
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      - ./config:/config
+      - ./custom_components/ocea_sb:/config/custom_components/ocea_sb
+    environment:
+      - TZ=Europe/Paris
+    restart: unless-stopped
+    network_mode: host

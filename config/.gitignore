@@ -1,0 +1,10 @@
+.cloud
+.storage
+blueprints
+custom_components
+deps
+tts
+.ha_*
+.HA_*
+*.log
+home-assistant.log*
