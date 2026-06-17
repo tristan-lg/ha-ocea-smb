@@ -3,6 +3,7 @@
   "name": "Ocea Smart Building",
   "codeowners": ["@tristan-lg"],
   "config_flow": true,
+  "dependencies": ["recorder"],
   "documentation": "https://github.com/tristan-lg/ha-ocea-smb",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/tristan-lg/ha-ocea-smb/issues",

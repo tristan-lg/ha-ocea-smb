@@ -9,7 +9,14 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
 
 from .api import OceaApiClient
-from .const import CONF_LOCAL_ID, DOMAIN
+from .const import (
+    CONF_LOCAL_ID,
+    CONF_PRICE_HOT_WATER,
+    CONF_PRICE_THERMAL,
+    DEFAULT_PRICE_HOT_WATER,
+    DEFAULT_PRICE_THERMAL,
+    DOMAIN,
+)
 from .coordinator import OceaDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,7 +32,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         local_id=entry.data[CONF_LOCAL_ID],
     )
 
-    coordinator = OceaDataUpdateCoordinator(hass, client)
+    # Unit prices (per fluid) used to build the cost statistics
+    prices = {
+        "eau_chaude": float(
+            entry.options.get(CONF_PRICE_HOT_WATER, DEFAULT_PRICE_HOT_WATER)
+        ),
+        "cetc": float(
+            entry.options.get(CONF_PRICE_THERMAL, DEFAULT_PRICE_THERMAL)
+        ),
+    }
+
+    coordinator = OceaDataUpdateCoordinator(hass, client, prices)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})

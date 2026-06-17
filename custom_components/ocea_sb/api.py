@@ -309,6 +309,36 @@ class OceaApiClient:
 
         return resp.json()
 
+    def _api_post(self, path: str, payload: dict, retry_auth: bool = True) -> any:
+        """Make an authenticated POST request to the Ocea API."""
+        if not self._access_token:
+            self.authenticate()
+
+        url = f"{API_BASE}{path}"
+        resp = self._session.post(
+            url,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {self._access_token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": B2C_REDIRECT_URI,
+                "Referer": f"{B2C_REDIRECT_URI}/",
+                "User-Agent": UA,
+            },
+            timeout=30,
+        )
+
+        if resp.status_code == 401 and retry_auth:
+            _LOGGER.debug("Token expired, refreshing")
+            self.refresh_access_token()
+            return self._api_post(path, payload, retry_auth=False)
+
+        if resp.status_code != 200:
+            raise OceaApiError(f"API error: HTTP {resp.status_code} — {resp.text[:200]}")
+
+        return resp.json()
+
     def get_resident(self) -> dict:
         """Get resident info including occupations (logementId)."""
         return self._api_get("/api/v1/resident")
@@ -316,6 +346,24 @@ class OceaApiClient:
     def get_consumptions(self) -> list[dict[str, str]]:
         """Get water consumption data."""
         return self._api_get(f"/api/v1/local/{self._local_id}/dashboard/consos")
+
+    def get_conso_history(
+        self,
+        fluide: str,
+        debut: str,
+        fin: str,
+        granularity: str = "Day",
+    ) -> dict:
+        """Get detailed consumption history for a fluid over a date range.
+
+        ``debut`` / ``fin`` must be ISO strings such as
+        '2026-01-01T00:00:00.000Z'. Returns the raw API response which
+        contains 'unite' and a 'consommations' list.
+        """
+        return self._api_post(
+            f"/api/v1/local/{self._local_id}/conso/{fluide}",
+            {"debut": debut, "fin": fin, "granularity": granularity},
+        )
 
     def validate_credentials(self) -> dict:
         """Test credentials and return resident data with logementId.

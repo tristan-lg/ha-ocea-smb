@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -16,6 +17,7 @@ from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_LOCAL_ID,
@@ -28,6 +30,28 @@ from .const import (
 from .coordinator import OceaDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _start_of_current_month() -> datetime:
+    """Return the start of the current month (local time, tz-aware).
+
+    Used as ``last_reset`` because Ocea consumption values are monthly
+    figures that reset to zero at the beginning of each month.
+    """
+    now = dt_util.now()
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _start_of_current_year() -> datetime:
+    """Return the start of the current year (local time, tz-aware).
+
+    Used as ``last_reset`` for the yearly sensors, which accumulate from
+    January 1st and reset on the next new year.
+    """
+    now = dt_util.now()
+    return now.replace(
+        month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -45,7 +69,7 @@ SENSOR_TYPES: tuple[OceaSensorEntityDescription, ...] = (
         name="Eau froide",
         native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
         device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         icon="mdi:water",
         suggested_display_precision=2,
     ),
@@ -56,7 +80,7 @@ SENSOR_TYPES: tuple[OceaSensorEntityDescription, ...] = (
         name="Eau chaude",
         native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
         device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         icon="mdi:water-thermometer",
         suggested_display_precision=2,
     ),
@@ -64,10 +88,10 @@ SENSOR_TYPES: tuple[OceaSensorEntityDescription, ...] = (
         key="cetc",
         data_key="cetc",
         translation_key="cetc",
-        name="Compteur thermique chaud",
+        name="Chauffage (mois)",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         icon="mdi:radiator",
         suggested_display_precision=2,
     ),
@@ -81,7 +105,7 @@ PRICE_SENSORS: tuple[tuple[str, str, float, str, str, str], ...] = (
         CONF_PRICE_HOT_WATER,
         DEFAULT_PRICE_HOT_WATER,
         "prix_eau_chaude",
-        "Facture eau chaude",
+        "Facture eau chaude (mois)",
         "mdi:cash",
     ),
     (
@@ -89,7 +113,61 @@ PRICE_SENSORS: tuple[tuple[str, str, float, str, str, str], ...] = (
         CONF_PRICE_THERMAL,
         DEFAULT_PRICE_THERMAL,
         "prix_thermique_chaud",
-        "Facture chauffage",
+        "Facture chauffage (mois)",
+        "mdi:cash",
+    ),
+)
+
+
+# Capteurs de consommation annuelle (cumul depuis le 1er janvier)
+# (data_key source, clé/translation, libellé, unité, device_class, icône)
+YEAR_SENSORS: tuple[
+    tuple[str, str, str, str, SensorDeviceClass, str], ...
+] = (
+    (
+        "eau_froide",
+        "eau_froide_annee",
+        "Eau froide (année)",
+        UnitOfVolume.CUBIC_METERS,
+        SensorDeviceClass.WATER,
+        "mdi:water",
+    ),
+    (
+        "eau_chaude",
+        "eau_chaude_annee",
+        "Eau chaude (année)",
+        UnitOfVolume.CUBIC_METERS,
+        SensorDeviceClass.WATER,
+        "mdi:water-thermometer",
+    ),
+    (
+        "cetc",
+        "cetc_annee",
+        "Chauffage (année)",
+        UnitOfEnergy.KILO_WATT_HOUR,
+        SensorDeviceClass.ENERGY,
+        "mdi:radiator",
+    ),
+)
+
+
+# Factures annuelles calculées (cumul depuis le 1er janvier)
+# (data_key source, option de prix, défaut, clé/translation, libellé, icône)
+YEAR_PRICE_SENSORS: tuple[tuple[str, str, float, str, str, str], ...] = (
+    (
+        "eau_chaude",
+        CONF_PRICE_HOT_WATER,
+        DEFAULT_PRICE_HOT_WATER,
+        "prix_eau_chaude_annee",
+        "Facture eau chaude (année)",
+        "mdi:cash",
+    ),
+    (
+        "cetc",
+        CONF_PRICE_THERMAL,
+        DEFAULT_PRICE_THERMAL,
+        "prix_thermique_chaud_annee",
+        "Facture chauffage (année)",
         "mdi:cash",
     ),
 )
@@ -123,6 +201,41 @@ async def async_setup_entry(
             )
             entities.append(
                 OceaPriceSensor(
+                    coordinator=coordinator,
+                    local_id=local_id,
+                    source_key=source_key,
+                    price=price,
+                    key=key,
+                    name=name,
+                    icon=icon,
+                )
+            )
+
+    # Capteurs de consommation annuelle (cumul depuis le 1er janvier)
+    year_data = (coordinator.data or {}).get("annee", {})
+    for source_key, key, name, unit, device_class, icon in YEAR_SENSORS:
+        if source_key in year_data:
+            entities.append(
+                OceaYearConsumptionSensor(
+                    coordinator=coordinator,
+                    local_id=local_id,
+                    source_key=source_key,
+                    key=key,
+                    name=name,
+                    unit=unit,
+                    device_class=device_class,
+                    icon=icon,
+                )
+            )
+
+    # Factures annuelles calculées
+    for source_key, option_key, default_price, key, name, icon in YEAR_PRICE_SENSORS:
+        if source_key in year_data:
+            price = float(
+                config_entry.options.get(option_key, default_price)
+            )
+            entities.append(
+                OceaYearPriceSensor(
                     coordinator=coordinator,
                     local_id=local_id,
                     source_key=source_key,
@@ -168,6 +281,16 @@ class OceaWaterSensor(
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get(self.entity_description.data_key)
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return when the monthly counter last reset (start of month).
+
+        Ocea returns the consumption for the current month, which resets
+        to zero on the 1st. Declaring last_reset lets Home Assistant treat
+        the value as a per-month total instead of a lifetime meter.
+        """
+        return _start_of_current_month()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -230,6 +353,11 @@ class OceaPriceSensor(
             return None
         return round(consumption * self._price, 2)
 
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return start of month: the cost is a monthly total that resets."""
+        return _start_of_current_month()
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data and log the computed price."""
@@ -246,5 +374,144 @@ class OceaPriceSensor(
             self._price,
         )
         super()._handle_coordinator_update()
+
+
+class OceaYearConsumptionSensor(
+    CoordinatorEntity[OceaDataUpdateCoordinator], SensorEntity
+):
+    """Yearly consumption sensor (sum since Jan 1st, monthly detail in attrs)."""
+
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator: OceaDataUpdateCoordinator,
+        local_id: str,
+        source_key: str,
+        key: str,
+        name: str,
+        unit: str,
+        device_class: SensorDeviceClass,
+        icon: str,
+    ) -> None:
+        """Initialize the yearly consumption sensor."""
+        super().__init__(coordinator)
+        self._local_id = local_id
+        self._source_key = source_key
+        self._key = key
+        self._attr_translation_key = key
+        self._attr_name = name
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_icon = icon
+        self._attr_unique_id = f"{DOMAIN}_{local_id}_{key}"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, local_id)},
+            "name": f"Ocea - Local {local_id}",
+            "manufacturer": "Ocea Smart Building",
+            "model": "Espace Résident",
+        }
+
+    def _year_data(self) -> dict | None:
+        """Return the yearly aggregate dict for this fluid, if available."""
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("annee", {}).get(self._source_key)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the yearly total consumption."""
+        data = self._year_data()
+        if data is None:
+            return None
+        return data.get("total")
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return start of year (the yearly total resets each January 1st)."""
+        return _start_of_current_year()
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Expose the per-month breakdown as attributes."""
+        data = self._year_data()
+        if data is None:
+            return None
+        return {"consommation_par_mois": data.get("mois", {})}
+
+
+class OceaYearPriceSensor(
+    CoordinatorEntity[OceaDataUpdateCoordinator], SensorEntity
+):
+    """Yearly bill sensor (yearly consumption * unit price)."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = CURRENCY_EURO
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator: OceaDataUpdateCoordinator,
+        local_id: str,
+        source_key: str,
+        price: float,
+        key: str,
+        name: str,
+        icon: str,
+    ) -> None:
+        """Initialize the yearly bill sensor."""
+        super().__init__(coordinator)
+        self._local_id = local_id
+        self._source_key = source_key
+        self._price = price
+        self._key = key
+        self._attr_translation_key = key
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_unique_id = f"{DOMAIN}_{local_id}_{key}"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, local_id)},
+            "name": f"Ocea - Local {local_id}",
+            "manufacturer": "Ocea Smart Building",
+            "model": "Espace Résident",
+        }
+
+    def _year_data(self) -> dict | None:
+        """Return the yearly aggregate dict for this fluid, if available."""
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("annee", {}).get(self._source_key)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the yearly bill (yearly total * unit price)."""
+        data = self._year_data()
+        if data is None or data.get("total") is None:
+            return None
+        return round(data["total"] * self._price, 2)
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return start of year (the yearly bill resets each January 1st)."""
+        return _start_of_current_year()
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Expose the per-month bill breakdown as attributes."""
+        data = self._year_data()
+        if data is None:
+            return None
+        mois = data.get("mois", {})
+        return {
+            "facture_par_mois": {
+                month: round(value * self._price, 2)
+                for month, value in mois.items()
+            }
+        }
+
 
 

@@ -56,6 +56,21 @@
       },
       "prix_thermique_chaud": {
         "name": "Hot thermal cost"
+      },
+      "eau_froide_annee": {
+        "name": "Cold water (year)"
+      },
+      "eau_chaude_annee": {
+        "name": "Hot water (year)"
+      },
+      "cetc_annee": {
+        "name": "Hot thermal meter (year)"
+      },
+      "prix_eau_chaude_annee": {
+        "name": "Hot water cost (year)"
+      },
+      "prix_thermique_chaud_annee": {
+        "name": "Hot thermal cost (year)"
       }
     },
     "button": {

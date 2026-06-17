@@ -49,13 +49,28 @@
         "name": "Eau chaude"
       },
       "cetc": {
-        "name": "Compteur thermique chaud"
+        "name": "Chauffage (mois)"
       },
       "prix_eau_chaude": {
-        "name": "Prix eau chaude"
+        "name": "Facture eau chaude (mois)"
       },
       "prix_thermique_chaud": {
-        "name": "Prix thermique chaud"
+        "name": "Facture chauffage (mois)"
+      },
+      "eau_froide_annee": {
+        "name": "Eau froide (année)"
+      },
+      "eau_chaude_annee": {
+        "name": "Eau chaude (année)"
+      },
+      "cetc_annee": {
+        "name": "Chauffage (année)"
+      },
+      "prix_eau_chaude_annee": {
+        "name": "Facture eau chaude (année)"
+      },
+      "prix_thermique_chaud_annee": {
+        "name": "Facture chauffage (année)"
       }
     },
     "button": {
