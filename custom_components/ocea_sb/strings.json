@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ocea Smart Building",
+        "description": "Connectez-vous à votre espace résident Ocea.",
+        "data": {
+          "email": "Email",
+          "password": "Mot de passe"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Ré-authentification Ocea",
+        "description": "Vos identifiants ont expiré, veuillez vous reconnecter.",
+        "data": {
+          "email": "Email",
+          "password": "Mot de passe"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Identifiants invalides",
+      "cannot_connect": "Impossible de se connecter au serveur Ocea",
+      "no_occupation": "Aucun logement trouvé pour ce compte",
+      "unknown": "Erreur inattendue"
+    },
+    "abort": {
+      "already_configured": "Ce compte est déjà configuré"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Paramètres Ocea",
+        "description": "Configurez les prix unitaires utilisés pour calculer les coûts.",
+        "data": {
+          "price_hot_water": "Prix de l'eau chaude (€ / m³)",
+          "price_thermal": "Prix du thermique chaud (€ / kWh)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "eau_froide": {
+        "name": "Eau froide"
+      },
+      "eau_chaude": {
+        "name": "Eau chaude"
+      },
+      "cetc": {
+        "name": "Compteur thermique chaud"
+      },
+      "prix_eau_chaude": {
+        "name": "Prix eau chaude"
+      },
+      "prix_thermique_chaud": {
+        "name": "Prix thermique chaud"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Rafraîchir"
+      }
+    }
+  }
+}

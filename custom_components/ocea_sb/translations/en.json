@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ocea Smart Building",
+        "description": "Connect to your Ocea resident space.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authentication",
+        "description": "Your credentials have expired. Please reconnect.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid credentials",
+      "cannot_connect": "Cannot connect to Ocea server",
+      "no_occupation": "No dwelling found for this account",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This account is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ocea settings",
+        "description": "Configure the unit prices used to compute costs.",
+        "data": {
+          "price_hot_water": "Hot water price (€ / m³)",
+          "price_thermal": "Hot thermal energy price (€ / kWh)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "eau_froide": {
+        "name": "Cold water"
+      },
+      "eau_chaude": {
+        "name": "Hot water"
+      },
+      "cetc": {
+        "name": "Hot thermal meter"
+      },
+      "prix_eau_chaude": {
+        "name": "Hot water cost"
+      },
+      "prix_thermique_chaud": {
+        "name": "Hot thermal cost"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Refresh"
+      }
+    }
+  }
+}

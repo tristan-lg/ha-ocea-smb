@@ -1,7 +1,7 @@
 # Access using : http://localhost:8123 with test:test
 services:
   homeassistant:
-    container_name: homeassistant-ocea-smb
+    container_name: homeassistant-ocea-sb
     image: ghcr.io/home-assistant/home-assistant:stable
     volumes:
       - ./config:/config

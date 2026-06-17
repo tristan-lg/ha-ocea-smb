@@ -1,1 +1,0 @@
-"""Set up the Ocea SB Thermosensor component."""

@@ -6,7 +6,7 @@ import requests
 from TokenStorageJson import TokenStorageJson
 
 TOKEN_URL = "https://osbespaceresident.b2clogin.com/osbespaceresident.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/token"
-CLIENT_ID = "1cacfb15-0b3c-42cc-a662-736e4737e7d9"
+CLIENT_ID = ""
 
 class TokenManager:
     def __init__(self, safety_margin=1800, force_refresh=False):

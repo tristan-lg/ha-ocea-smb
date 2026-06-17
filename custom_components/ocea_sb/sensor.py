@@ -1,110 +1,250 @@
-"""OceaCB sensor integration."""
+"""Sensor platform for Ocea Smart Building water consumption."""
+
 from __future__ import annotations
 
 import logging
-import voluptuous as vol
-from datetime import timedelta, datetime
-
-from .api.ConsoApi import ConsoApi
-from .api.TokenManager import TokenManager
-from .const import (
-    CONF_ACCESS_TOKEN
-)
+from dataclasses import dataclass
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
-
-from homeassistant.const import UnitOfEnergy, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfVolume
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.components.sensor import PLATFORM_SCHEMA
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.typing import (
-    ConfigType,
-    DiscoveryInfoType,
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import (
+    CONF_LOCAL_ID,
+    CONF_PRICE_HOT_WATER,
+    CONF_PRICE_THERMAL,
+    DEFAULT_PRICE_HOT_WATER,
+    DEFAULT_PRICE_THERMAL,
+    DOMAIN,
 )
+from .coordinator import OceaDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(minutes=1)
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_ACCESS_TOKEN): cv.string,
-})
 
-async def async_setup_platform(
+@dataclass(frozen=True, kw_only=True)
+class OceaSensorEntityDescription(SensorEntityDescription):
+    """Describe an Ocea sensor entity."""
+
+    data_key: str
+
+
+SENSOR_TYPES: tuple[OceaSensorEntityDescription, ...] = (
+    OceaSensorEntityDescription(
+        key="eau_froide",
+        data_key="eau_froide",
+        translation_key="eau_froide",
+        name="Eau froide",
+        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        device_class=SensorDeviceClass.WATER,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:water",
+        suggested_display_precision=2,
+    ),
+    OceaSensorEntityDescription(
+        key="eau_chaude",
+        data_key="eau_chaude",
+        translation_key="eau_chaude",
+        name="Eau chaude",
+        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        device_class=SensorDeviceClass.WATER,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:water-thermometer",
+        suggested_display_precision=2,
+    ),
+    OceaSensorEntityDescription(
+        key="cetc",
+        data_key="cetc",
+        translation_key="cetc",
+        name="Compteur thermique chaud",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:radiator",
+        suggested_display_precision=2,
+    ),
+)
+
+
+# (data_key source, option de prix, valeur par défaut, clé/translation, libellé, icône)
+PRICE_SENSORS: tuple[tuple[str, str, float, str, str, str], ...] = (
+    (
+        "eau_chaude",
+        CONF_PRICE_HOT_WATER,
+        DEFAULT_PRICE_HOT_WATER,
+        "prix_eau_chaude",
+        "Facture eau chaude",
+        "mdi:cash",
+    ),
+    (
+        "cetc",
+        CONF_PRICE_THERMAL,
+        DEFAULT_PRICE_THERMAL,
+        "prix_thermique_chaud",
+        "Facture chauffage",
+        "mdi:cash",
+    ),
+)
+
+
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
+    config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None
 ) -> None:
-    """Set up the sensor platform."""
-    session = async_get_clientsession(hass)
-    async_add_entities([
-        ThermoSensor(conso_api=ConsoApi(session, TokenManager(config))),
-        WaterSensor(conso_api=ConsoApi(session, TokenManager(config)))
-    ], update_before_add=True)
+    """Set up Ocea Smart Building sensors from a config entry."""
+    coordinator: OceaDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+    local_id = config_entry.data[CONF_LOCAL_ID]
+
+    entities: list[SensorEntity] = []
+    for description in SENSOR_TYPES:
+        if coordinator.data and description.data_key in coordinator.data:
+            entities.append(
+                OceaWaterSensor(
+                    coordinator=coordinator,
+                    description=description,
+                    local_id=local_id,
+                )
+            )
+
+    # Capteurs de prix calculés (valeur consommée * prix unitaire configuré)
+    for source_key, option_key, default_price, key, name, icon in PRICE_SENSORS:
+        if coordinator.data and source_key in coordinator.data:
+            price = float(
+                config_entry.options.get(option_key, default_price)
+            )
+            entities.append(
+                OceaPriceSensor(
+                    coordinator=coordinator,
+                    local_id=local_id,
+                    source_key=source_key,
+                    price=price,
+                    key=key,
+                    name=name,
+                    icon=icon,
+                )
+            )
+
+    async_add_entities(entities, update_before_add=True)
 
 
-class ClientSensor(SensorEntity):
-    """Representation of a Sensor."""
-    def __init__(self, conso_api: ConsoApi):
-        super().__init__()
-        self.api = conso_api
-        self.available = True
+class OceaWaterSensor(
+    CoordinatorEntity[OceaDataUpdateCoordinator], SensorEntity
+):
+    """Representation of an Ocea water consumption sensor."""
 
+    entity_description: OceaSensorEntityDescription
+    _attr_has_entity_name = True
 
-class ThermoSensor(ClientSensor):
-    """Representation of a Sensor."""
-    _attr_name = "Consommation thermique"
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    def __init__(
+        self,
+        coordinator: OceaDataUpdateCoordinator,
+        description: OceaSensorEntityDescription,
+        local_id: str,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._local_id = local_id
+        self._attr_unique_id = f"{DOMAIN}_{local_id}_{description.key}"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, local_id)},
+            "name": f"Ocea - Local {local_id}",
+            "manufacturer": "Ocea Smart Building",
+            "model": "Espace Résident",
+        }
 
-    async def async_update(self):
-        _LOGGER.info("Triggering async update for OCEA SB - Thermo sensor")
-        data = await self.api.get_conso_eau_chaude(
-            datetime.now().strftime("%Y-%m-%dT00:00:00"),
-            datetime.now().strftime("%Y-%m-%dT23:59:59")
+    @property
+    def native_value(self) -> float | None:
+        """Return the sensor value."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get(self.entity_description.data_key)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator and log the new value."""
+        _LOGGER.info(
+            "Capteur Ocea '%s' (local %s) mis à jour : %s %s",
+            self.entity_description.key,
+            self._local_id,
+            self.native_value,
+            self.entity_description.native_unit_of_measurement,
         )
+        super()._handle_coordinator_update()
 
-        # print
-        self.print_conso_data(data, "🚿")
-        self._attr_native_value = 21
 
-    def print_conso_data(self, consodata, type):
-        if consodata is None:
-            _LOGGER.warning(f"{type} No data received.")
-            return
+class OceaPriceSensor(
+    CoordinatorEntity[OceaDataUpdateCoordinator], SensorEntity
+):
+    """Calculated price sensor: consumption value * configured unit price."""
 
-        totalKwh = 0
-        for record in consodata.get("consommations", []):
-            # convert 2025-04-01T00:00:00 to date object
-            date = record.get("date")
-            date_obj = datetime.strptime(date, "%Y-%m-%dT%H:%M:%S").date()
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = CURRENCY_EURO
+    _attr_suggested_display_precision = 2
 
-            date_str = date_obj.strftime("%d/%m/%Y")
-            value = record.get("valeur")
-            # 1000 Kwh = 96€
-            price = (value / 1000) * 96
-            totalKwh += value
-            _LOGGER.info(f"[{type}] Date: {date_str}, Value: {value} Kwh, Price: {price:.2f} €")
+    def __init__(
+        self,
+        coordinator: OceaDataUpdateCoordinator,
+        local_id: str,
+        source_key: str,
+        price: float,
+        key: str,
+        name: str,
+        icon: str,
+    ) -> None:
+        """Initialize the calculated price sensor."""
+        super().__init__(coordinator)
+        self._local_id = local_id
+        self._source_key = source_key
+        self._price = price
+        self._key = key
+        self._attr_translation_key = key
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_unique_id = f"{DOMAIN}_{local_id}_{key}"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, local_id)},
+            "name": f"Ocea - Local {local_id}",
+            "manufacturer": "Ocea Smart Building",
+            "model": "Espace Résident",
+        }
 
-        totalPrice = (totalKwh / 1000) * 96
-        _LOGGER.info(f"[{type}] Total consumption: {totalKwh} Kwh, Total price: {totalPrice:.2f} €")
+    @property
+    def native_value(self) -> float | None:
+        """Return the computed price (consumption * unit price)."""
+        if self.coordinator.data is None:
+            return None
+        consumption = self.coordinator.data.get(self._source_key)
+        if consumption is None:
+            return None
+        return round(consumption * self._price, 2)
 
-class WaterSensor(ClientSensor):
-    """Representation of a Sensor."""
-    _attr_name = "Consommation eau-chaude"
-    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
-    _attr_device_class = SensorDeviceClass.WATER
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-    _attr_native_value = 0.0
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data and log the computed price."""
+        _LOGGER.info(
+            "Capteur de prix Ocea '%s' (local %s) mis à jour : %s %s "
+            "(conso %s × prix %s)",
+            self._key,
+            self._local_id,
+            self.native_value,
+            CURRENCY_EURO,
+            self.coordinator.data.get(self._source_key)
+            if self.coordinator.data
+            else None,
+            self._price,
+        )
+        super()._handle_coordinator_update()
 
-    async def async_update(self):
-        _LOGGER.info("Triggering async update for OCEA SB - Water sensor")
-        data = await self.fetch_data()
-        self._attr_native_value = data
+

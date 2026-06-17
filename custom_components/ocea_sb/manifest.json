@@ -1,11 +1,11 @@
 {
-  "codeowners": ["@tlegacque"],
-  "config_flow": true,
-  "dependencies": [],
-  "documentation": "https://github.com/user/my_component/",
   "domain": "ocea_sb",
+  "name": "Ocea Smart Building",
+  "codeowners": ["@tristan-lg"],
+  "config_flow": true,
+  "documentation": "https://github.com/tristan-lg/ha-ocea-smb",
   "iot_class": "cloud_polling",
-  "name": "Ocea SB Thermosensor",
+  "issue_tracker": "https://github.com/tristan-lg/ha-ocea-smb/issues",
   "requirements": [],
   "version": "1.0.0"
 }
