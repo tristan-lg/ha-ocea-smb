@@ -31,17 +31,17 @@ FLUID_MAP: dict[str, str] = {
     "cetc": "Cetc",
 }
 
-# Metadata for the long-term monthly statistics: key -> (display name, unit)
+# Metadata for the long-term daily statistics: key -> (display name, unit)
 STAT_META: dict[str, tuple[str, str]] = {
-    "eau_froide": ("Ocea eau froide (mensuel)", UnitOfVolume.CUBIC_METERS),
-    "eau_chaude": ("Ocea eau chaude (mensuel)", UnitOfVolume.CUBIC_METERS),
-    "cetc": ("Ocea Chauffage (mensuel)", UnitOfEnergy.KILO_WATT_HOUR),
+    "eau_froide": ("Ocea eau froide (journalier)", UnitOfVolume.CUBIC_METERS),
+    "eau_chaude": ("Ocea eau chaude (journalier)", UnitOfVolume.CUBIC_METERS),
+    "cetc": ("Ocea Chauffage (journalier)", UnitOfEnergy.KILO_WATT_HOUR),
 }
 
-# Display names for the monthly cost statistics: key -> display name
+# Display names for the daily cost statistics: key -> display name
 PRICE_STAT_NAMES: dict[str, str] = {
-    "eau_chaude": "Ocea facture eau chaude (mensuel)",
-    "cetc": "Ocea facture chauffage (mensuel)",
+    "eau_chaude": "Ocea facture eau chaude (journalier)",
+    "cetc": "Ocea facture chauffage (journalier)",
 }
 
 
@@ -97,11 +97,11 @@ class OceaDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 result[fluide.lower()] = valeur
 
-        # Yearly consumption (since Jan 1st), aggregated per month
+        # Yearly consumption (since Jan 1st), aggregated per day
         result["annee"] = await self._async_fetch_year(list(result.keys()))
 
-        # Inject per-month long-term statistics so HA can graph them
-        self._import_monthly_statistics(result["annee"])
+        # Inject per-day long-term statistics so HA can graph them
+        self._import_daily_statistics(result["annee"])
 
         _LOGGER.debug("Ocea consumption data updated: %s", result)
         return result
@@ -109,7 +109,7 @@ class OceaDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_fetch_year(
         self, fluid_keys: list[str]
     ) -> dict[str, dict[str, Any]]:
-        """Fetch and aggregate per-month consumption for the current year."""
+        """Fetch and aggregate per-day consumption for the current year."""
         now = dt_util.now()
         year = now.year
         debut = f"{year}-01-01T00:00:00.000Z"
@@ -139,46 +139,46 @@ class OceaDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 continue
 
-            yearly[key] = self._aggregate_by_month(history)
+            yearly[key] = self._aggregate_by_day(history)
             _LOGGER.info(
                 "Ocea historique annuel '%s' : total %s, détail %s",
                 key,
                 yearly[key]["total"],
-                yearly[key]["mois"],
+                yearly[key]["jours"],
             )
 
         return yearly
 
     @staticmethod
-    def _aggregate_by_month(history: dict[str, Any]) -> dict[str, Any]:
-        """Aggregate a daily consumption history into per-month totals."""
-        mois: dict[str, float] = {}
+    def _aggregate_by_day(history: dict[str, Any]) -> dict[str, Any]:
+        """Aggregate a daily consumption history into per-day totals."""
+        jours: dict[str, float] = {}
         total = 0.0
         for entry in history.get("consommations", []):
             raw_val = entry.get("valeur", 0) or 0
             value = float(str(raw_val).replace(",", "."))
             date_str = str(entry.get("date", ""))
-            month_key = date_str[:7]  # "YYYY-MM"
-            if not month_key:
+            day_key = date_str[:10]  # "YYYY-MM-DD"
+            if len(day_key) != 10:
                 continue
-            mois[month_key] = round(mois.get(month_key, 0.0) + value, 3)
+            jours[day_key] = round(jours.get(day_key, 0.0) + value, 3)
             total += value
 
-        return {"total": round(total, 3), "mois": mois}
+        return {"total": round(total, 3), "jours": jours}
 
-    def _import_monthly_statistics(
+    def _import_daily_statistics(
         self, yearly: dict[str, dict[str, Any]]
     ) -> None:
-        """Push per-month values into Home Assistant long-term statistics.
+        """Push per-day values into Home Assistant long-term statistics.
 
         Creates one external statistic per fluid (e.g. ``ocea_sb:eau_chaude``)
-        with a monthly cumulative sum, plus one cost statistic per priced
+        with a daily cumulative sum, plus one cost statistic per priced
         fluid (e.g. ``ocea_sb:eau_chaude_facture``), so they can be displayed
         in a statistics graph card and the Energy dashboard.
         """
         for key, data in yearly.items():
-            mois: dict[str, float] = data.get("mois", {})
-            if not mois:
+            jours: dict[str, float] = data.get("jours", {})
+            if not jours:
                 continue
 
             # 1) Consumption statistic
@@ -189,22 +189,22 @@ class OceaDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     statistic_id=f"{DOMAIN}:{key}",
                     name=name,
                     unit=unit,
-                    monthly_values=mois,
+                    daily_values=jours,
                 )
 
             # 2) Cost statistic (consumption * unit price)
             price = self._prices.get(key)
             price_name = PRICE_STAT_NAMES.get(key)
             if price and price_name:
-                monthly_cost = {
-                    month: round(value * price, 2)
-                    for month, value in mois.items()
+                daily_cost = {
+                    day: round(value * price, 2)
+                    for day, value in jours.items()
                 }
                 self._push_statistic(
                     statistic_id=f"{DOMAIN}:{key}_facture",
                     name=price_name,
                     unit=CURRENCY_EURO,
-                    monthly_values=monthly_cost,
+                    daily_values=daily_cost,
                 )
 
     def _push_statistic(
@@ -212,17 +212,17 @@ class OceaDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         statistic_id: str,
         name: str,
         unit: str,
-        monthly_values: dict[str, float],
+        daily_values: dict[str, float],
     ) -> None:
-        """Build and import a single external statistic from monthly values."""
+        """Build and import a single external statistic from daily values."""
         statistics: list[StatisticData] = []
         running_sum = 0.0
-        for month_key in sorted(monthly_values):
-            running_sum = round(running_sum + monthly_values[month_key], 2)
+        for day_key in sorted(daily_values):
+            running_sum = round(running_sum + daily_values[day_key], 2)
             statistics.append(
                 StatisticData(
-                    start=self._month_start_utc(month_key),
-                    state=monthly_values[month_key],
+                    start=self._day_start_utc(day_key),
+                    state=daily_values[day_key],
                     sum=running_sum,
                 )
             )
@@ -237,18 +237,18 @@ class OceaDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         _LOGGER.debug(
-            "Import de %d statistiques mensuelles pour %s",
+            "Import de %d statistiques journalières pour %s",
             len(statistics),
             statistic_id,
         )
         async_add_external_statistics(self.hass, metadata, statistics)
 
     @staticmethod
-    def _month_start_utc(month_key: str) -> datetime:
-        """Return the UTC datetime for the first day of a 'YYYY-MM' month."""
-        year, month = (int(part) for part in month_key.split("-"))
+    def _day_start_utc(day_key: str) -> datetime:
+        """Return the UTC datetime for a 'YYYY-MM-DD' day (local midnight)."""
+        year, month, day = (int(part) for part in day_key.split("-"))
         local = datetime(
-            year, month, 1, tzinfo=dt_util.DEFAULT_TIME_ZONE
+            year, month, day, tzinfo=dt_util.DEFAULT_TIME_ZONE
         )
         return dt_util.as_utc(local)
 

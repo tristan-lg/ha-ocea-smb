@@ -6,6 +6,11 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMetaData,
+)
+from homeassistant.components.recorder.statistics import async_import_statistics
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -42,16 +47,50 @@ def _start_of_current_month() -> datetime:
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def _start_of_current_year() -> datetime:
-    """Return the start of the current year (local time, tz-aware).
+def _day_start_utc(day_key: str) -> datetime:
+    """Return the UTC datetime for a 'YYYY-MM-DD' day (local midnight)."""
+    year, month, day = (int(part) for part in day_key.split("-"))
+    local = datetime(year, month, day, tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    return dt_util.as_utc(local)
 
-    Used as ``last_reset`` for the yearly sensors, which accumulate from
-    January 1st and reset on the next new year.
+
+def _import_entity_day_statistics(
+    hass: HomeAssistant,
+    entity_id: str,
+    unit: str | None,
+    daily_values: dict[str, float],
+) -> None:
+    """Rewrite an entity's long-term statistics from per-day values.
+
+    Each day becomes a statistic point whose ``state`` is the daily
+    consumption/cost and ``sum`` the running cumulative total. This makes
+    the entity's history graph show the real per-day figures instead of
+    a flat line of the yearly total.
     """
-    now = dt_util.now()
-    return now.replace(
-        month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+    if not daily_values:
+        return
+
+    statistics: list[StatisticData] = []
+    running_sum = 0.0
+    for day_key in sorted(daily_values):
+        running_sum = round(running_sum + daily_values[day_key], 2)
+        statistics.append(
+            StatisticData(
+                start=_day_start_utc(day_key),
+                state=daily_values[day_key],
+                sum=running_sum,
+            )
+        )
+
+    metadata = StatisticMetaData(
+        has_mean=False,
+        has_sum=True,
+        name=None,
+        source="recorder",
+        statistic_id=entity_id,
+        unit_of_measurement=unit,
     )
+    async_import_statistics(hass, metadata, statistics)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -379,10 +418,13 @@ class OceaPriceSensor(
 class OceaYearConsumptionSensor(
     CoordinatorEntity[OceaDataUpdateCoordinator], SensorEntity
 ):
-    """Yearly consumption sensor (sum since Jan 1st, monthly detail in attrs)."""
+    """Yearly consumption sensor (sum since Jan 1st, daily detail in attrs).
+
+    The long-term statistics of this entity are rewritten from the per-day
+    values so the history graph shows each day's consumption.
+    """
 
     _attr_has_entity_name = True
-    _attr_state_class = SensorStateClass.TOTAL
     _attr_suggested_display_precision = 2
 
     def __init__(
@@ -428,28 +470,42 @@ class OceaYearConsumptionSensor(
             return None
         return data.get("total")
 
-    @property
-    def last_reset(self) -> datetime | None:
-        """Return start of year (the yearly total resets each January 1st)."""
-        return _start_of_current_year()
 
-    @property
-    def extra_state_attributes(self) -> dict | None:
-        """Expose the per-month breakdown as attributes."""
+    async def async_added_to_hass(self) -> None:
+        """Import daily statistics once the entity_id is known."""
+        await super().async_added_to_hass()
+        self._import_daily_statistics()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the daily statistics on each data update."""
+        self._import_daily_statistics()
+        super()._handle_coordinator_update()
+
+    def _import_daily_statistics(self) -> None:
+        """Rewrite this entity's history from the per-day consumption."""
         data = self._year_data()
-        if data is None:
-            return None
-        return {"consommation_par_mois": data.get("mois", {})}
+        if not data:
+            return
+        _import_entity_day_statistics(
+            self.hass,
+            self.entity_id,
+            self._attr_native_unit_of_measurement,
+            data.get("jours", {}),
+        )
 
 
 class OceaYearPriceSensor(
     CoordinatorEntity[OceaDataUpdateCoordinator], SensorEntity
 ):
-    """Yearly bill sensor (yearly consumption * unit price)."""
+    """Yearly bill sensor (yearly consumption * unit price).
+
+    The long-term statistics are rewritten from the per-day bills so the
+    history graph shows each day's cost.
+    """
 
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = CURRENCY_EURO
     _attr_suggested_display_precision = 2
 
@@ -486,6 +542,16 @@ class OceaYearPriceSensor(
             return None
         return self.coordinator.data.get("annee", {}).get(self._source_key)
 
+    def _daily_bills(self) -> dict[str, float]:
+        """Return the per-day bill (daily consumption * unit price)."""
+        data = self._year_data()
+        if data is None:
+            return {}
+        return {
+            day: round(value * self._price, 2)
+            for day, value in data.get("jours", {}).items()
+        }
+
     @property
     def native_value(self) -> float | None:
         """Return the yearly bill (yearly total * unit price)."""
@@ -494,24 +560,27 @@ class OceaYearPriceSensor(
             return None
         return round(data["total"] * self._price, 2)
 
-    @property
-    def last_reset(self) -> datetime | None:
-        """Return start of year (the yearly bill resets each January 1st)."""
-        return _start_of_current_year()
 
-    @property
-    def extra_state_attributes(self) -> dict | None:
-        """Expose the per-month bill breakdown as attributes."""
-        data = self._year_data()
-        if data is None:
-            return None
-        mois = data.get("mois", {})
-        return {
-            "facture_par_mois": {
-                month: round(value * self._price, 2)
-                for month, value in mois.items()
-            }
-        }
+    async def async_added_to_hass(self) -> None:
+        """Import daily statistics once the entity_id is known."""
+        await super().async_added_to_hass()
+        self._import_daily_statistics()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the daily statistics on each data update."""
+        self._import_daily_statistics()
+        super()._handle_coordinator_update()
+
+    def _import_daily_statistics(self) -> None:
+        """Rewrite this entity's history from the per-day bills."""
+        _import_entity_day_statistics(
+            self.hass,
+            self.entity_id,
+            CURRENCY_EURO,
+            self._daily_bills(),
+        )
+
 
 
 
